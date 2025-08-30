@@ -14,15 +14,19 @@ def load_model():
         X_train = joblib.load("X_train.pkl")
         class_names = ["Slight", "Serious", "Fatal"]
     except FileNotFoundError:
-        # Fallback: Dummy model if .pkl files not found
+        # Fallback: create dummy training data with SAME columns as your UI
         st.warning("⚠️ Model file not found. Using DummyClassifier for demo.")
+        cols = ["Speed_limit", "Number_of_Vehicles", "Number_of_Casualties",
+                "Weather_Conditions", "Light_Conditions"]
+        
+        # Fake training data (so shapes & columns match)
+        X_train = pd.DataFrame(np.random.randint(0, 5, size=(100, len(cols))), columns=cols)
+        y_train = np.random.randint(0, 3, size=100)  # 3 classes (Slight, Serious, Fatal)
+        
         from sklearn.dummy import DummyClassifier
-        from sklearn.datasets import load_iris
-        data = load_iris()
-        X_train = pd.DataFrame(data.data, columns=data.feature_names)
         model = DummyClassifier(strategy="most_frequent")
-        model.fit(X_train, data.target)
-        class_names = data.target_names.tolist()
+        model.fit(X_train, y_train)
+        class_names = ["Slight", "Serious", "Fatal"]
     return model, X_train, class_names
 
 
@@ -86,3 +90,4 @@ if st.sidebar.button("Predict Severity"):
 
 st.markdown("---")
 st.info("This is a demo Accident Severity Predictor using XGBoost + LIME")
+
