@@ -8,10 +8,23 @@ import matplotlib.pyplot as plt
 # ================= Load Model & Data =================
 @st.cache_resource
 def load_model():
-    model = joblib.load("xgb_accident_model.pkl")
-    X_train = joblib.load("X_train.pkl")
-    class_names = ["Slight", "Serious", "Fatal"]
+    try:
+        # Try loading saved model + training data
+        model = joblib.load("xgb_accident_model.pkl")
+        X_train = joblib.load("X_train.pkl")
+        class_names = ["Slight", "Serious", "Fatal"]
+    except FileNotFoundError:
+        # Fallback: Dummy model if .pkl files not found
+        st.warning("⚠️ Model file not found. Using DummyClassifier for demo.")
+        from sklearn.dummy import DummyClassifier
+        from sklearn.datasets import load_iris
+        data = load_iris()
+        X_train = pd.DataFrame(data.data, columns=data.feature_names)
+        model = DummyClassifier(strategy="most_frequent")
+        model.fit(X_train, data.target)
+        class_names = data.target_names.tolist()
     return model, X_train, class_names
+
 
 model, X_train, class_names = load_model()
 
