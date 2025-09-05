@@ -61,7 +61,7 @@ if model is not None and not df.empty:
     st.sidebar.header("🔮 Simulate an Accident Scenario")
     
     hour = st.sidebar.slider("Hour of Day", 0, 23, 17)
-    day_of_week = st.sidebar.selectbox("Day of Week", options=df['day_of_week'].unique(), index=4)
+    day_of_week = st.sidebar.selectbox("Day of Week", options=df['weekday'].unique(), index=4)
     light_conditions = st.sidebar.selectbox("Light Conditions", options=sorted(df['light_conditions'].unique()))
     weather_conditions = st.sidebar.selectbox("Weather Conditions", options=sorted(df['weather_conditions'].unique()))
     road_surface = st.sidebar.selectbox("Road Surface Conditions", options=sorted(df['road_surface_conditions'].dropna().unique()))
@@ -86,7 +86,7 @@ if model is not None and not df.empty:
         # Update with user inputs
         user_inputs = {
             'hour': [hour],
-            'day_of_week': [day_of_week],
+            'weekday': [day_of_week],
             'light_conditions': [light_conditions],
             'weather_conditions': [weather_conditions],
             'road_surface_conditions': [road_surface],
@@ -95,8 +95,25 @@ if model is not None and not df.empty:
         }
         input_data.update(user_inputs)
 
-        input_df = pd.DataFrame(input_data)[feature_columns_in_order]
-        
+        # --- Encode categorical inputs using training mapping ---
+        for col in ['weekday', 'light_conditions', 'weather_conditions', 'road_surface_conditions']:
+            if col in df.columns and col in input_data:
+                try:
+                    categories = dict(enumerate(df[col].astype('category').cat.categories))
+                    reverse_map = {v: k for k, v in categories.items()}
+                    input_data[col] = [reverse_map.get(input_data[col][0], 0)]
+                except Exception as e:
+                    st.warning(f"Encoding issue with {col}: {e}")
+                    input_data[col] = [0]
+
+        # Create input DataFrame with correct order
+        input_df = pd.DataFrame(input_data)
+        input_df = input_df.reindex(columns=feature_columns_in_order, fill_value=0)
+
+        # Debugging check
+        st.write("✅ Model expects:", model.get_booster().feature_names)
+        st.write("✅ Input provided:", input_df.columns.tolist())
+
         # Make prediction
         prediction_index = model.predict(input_df)[0]
         prediction_proba = model.predict_proba(input_df)[0]
