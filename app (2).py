@@ -72,6 +72,9 @@ if model is not None and not df.empty:
         input_data = {}
         for col in feature_columns_in_order:
             # If the column is numeric, use the median as the default
+            st.write("Available columns:", df.columns.tolist())
+            st.write("Looking for column:", col)
+
             if pd.api.types.is_numeric_dtype(df[col]):
                 input_data[col] = [df[col].median()]
             # If the column is categorical/object, use the mode (most frequent value)
