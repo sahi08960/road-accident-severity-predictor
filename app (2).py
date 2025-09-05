@@ -4,6 +4,7 @@ import numpy as np
 import joblib
 import zipfile
 import os
+import lime
 import lime.lime_tabular
 import matplotlib.pyplot as plt
 
