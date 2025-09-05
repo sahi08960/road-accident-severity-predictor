@@ -1,0 +1,7 @@
+streamlit
+pandas
+pydeck
+xgboost
+scikit-learn
+imblearn
+joblib
