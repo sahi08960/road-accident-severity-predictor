@@ -102,17 +102,12 @@ if model is not None and not df.empty:
                     categories = dict(enumerate(df[col].astype('category').cat.categories))
                     reverse_map = {v: k for k, v in categories.items()}
                     input_data[col] = [reverse_map.get(input_data[col][0], 0)]
-                except Exception as e:
-                    st.warning(f"Encoding issue with {col}: {e}")
+                except Exception:
                     input_data[col] = [0]
 
         # Create input DataFrame with correct order
         input_df = pd.DataFrame(input_data)
         input_df = input_df.reindex(columns=feature_columns_in_order, fill_value=0)
-
-        # Debugging check
-        st.write("✅ Model expects:", model.get_booster().feature_names)
-        st.write("✅ Input provided:", input_df.columns.tolist())
 
         # Make prediction
         prediction_index = model.predict(input_df)[0]
