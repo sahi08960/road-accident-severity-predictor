@@ -1,8 +1,9 @@
 streamlit
 pandas
-numpy
 pydeck
-joblib
 xgboost
 scikit-learn
+imblearn
+joblib
+shap
 lime
