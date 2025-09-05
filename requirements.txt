@@ -5,3 +5,4 @@ pydeck
 joblib
 xgboost
 scikit-learn
+lime
