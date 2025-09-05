@@ -6,28 +6,10 @@ import joblib
 import zipfile
 import os
 
-# --- 1. PAGE CONFIGURATION ---
-st.set_page_config(
-    page_title="Road Accident Severity Prediction",
-    page_icon="🚗",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# --- Page Configuration ---
+st.set_page_config(page_title="Road Accident Severity Prediction", page_icon="🚗", layout="wide")
 
-# --- 2. DATA MAPPINGS ---
-# These dictionaries will make our app user-friendly.
-WEATHER_MAP = {
-    1: 'Fine', 2: 'Raining', 3: 'Snowing', 4: 'Fine + High winds',
-    5: 'Raining + High winds', 6: 'Snowing + High winds', 7: 'Fog or mist',
-    8: 'Other', 9: 'Unknown', -1: 'Data missing or out of range'
-}
-
-LIGHT_MAP = {
-    1: 'Daylight', 4: 'Darkness - lights lit', 5: 'Darkness - lights unlit',
-    6: 'Darkness - no lighting', 7: 'Darkness - lighting unknown', -1: 'Data missing or out of range'
-}
-
-# --- 3. CACHED FUNCTIONS FOR PERFORMANCE ---
+# --- Caching Functions ---
 @st.cache_resource
 def load_model():
     return joblib.load('xgb_accident_model.pkl')
@@ -46,80 +28,112 @@ def load_and_prep_data():
     df = pd.read_csv(csv_filepath, low_memory=False)
     df.dropna(subset=['Accident_Severity', 'latitude', 'longitude'], inplace=True)
     
-    # --- Create user-friendly labels from the maps ---
+    # --- Feature Engineering ---
+    df['Date'] = pd.to_datetime(df['Date'], errors='coerce', dayfirst=True)
+    df['Time_dt'] = pd.to_datetime(df['Time'], errors='coerce', format='%H:%M')
+    
+    df['Month'] = df['Date'].dt.month
+    df['Weekday'] = df['Date'].dt.weekday
+    df['Hour'] = df['Time_dt'].dt.hour
+    
     severity_map = {1: 'Fatal', 2: 'Serious', 3: 'Slight'}
     df['Severity Label'] = df['Accident_Severity'].map(severity_map)
-    df['Weather Label'] = df['Weather_Conditions'].map(WEATHER_MAP)
-    df['Light Label'] = df['Light_Conditions'].map(LIGHT_MAP)
     
+    # Encode categorical columns
+    for col in df.select_dtypes(include=['object']).columns:
+        if col not in ['Severity Label']:
+            df[col] = df[col].astype('category').cat.codes
+
+    # Normalize column names (for safe matching with model features)
+    df.columns = df.columns.str.strip().str.lower()
     return df
 
-# --- 4. LOAD ASSETS ---
+# --- Load Assets ---
 model = load_model()
 df = load_and_prep_data()
 
-# --- 5. MAIN USER INTERFACE ---
-st.title("🚦 Road Accident Severity: Prediction & Analysis")
-st.markdown("This dashboard uses a machine learning model to predict accident severity and visualize high-risk locations across India.")
+# --- User Interface ---
+st.title("Road Accident Severity: Prediction & Analysis 🚦")
+st.markdown("This interactive dashboard uses an XGBoost model to predict accident severity and visualize high-risk locations across India.")
 
-# Create a container for the main content
-main_container = st.container()
-
-with main_container:
-    # --- Interactive Map Visualization (CORRECTED) ---
-    st.subheader("🗺 Interactive Map of Accident Hotspots")
+if model is not None and not df.empty:
+    # --- Sidebar for User Input ---
+    st.sidebar.header("🔮 Simulate an Accident Scenario")
     
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        # Filter by Severity (using the friendly label)
-        selected_severity_map = st.selectbox(
-            "Filter by Severity:",
-            options=sorted(df['Severity Label'].dropna().unique())
-        )
-    with col2:
-        # Filter by Weather (using the friendly label)
-        selected_weather_map = st.selectbox(
-            "Filter by Weather:",
-            options=sorted(df['Weather Label'].dropna().unique())
-        )
-    with col3:
-        # Filter by Light Condition (using the friendly label)
-        selected_light_map = st.selectbox(
-            "Filter by Light Condition:",
-            options=sorted(df['Light Label'].dropna().unique())
-        )
+    hour = st.sidebar.slider("Hour of Day", 0, 23, 17)
+    day_of_week = st.sidebar.selectbox("Day of Week", options=df['day_of_week'].unique(), index=4)
+    light_conditions = st.sidebar.selectbox("Light Conditions", options=sorted(df['light_conditions'].unique()))
+    weather_conditions = st.sidebar.selectbox("Weather Conditions", options=sorted(df['weather_conditions'].unique()))
+    road_surface = st.sidebar.selectbox("Road Surface Conditions", options=sorted(df['road_surface_conditions'].dropna().unique()))
+    num_vehicles = st.sidebar.number_input("Number of Vehicles Involved", 1, 20, 2)
+    num_casualties = st.sidebar.number_input("Number of Casualties", 1, 25, 1)
 
-    # --- Filter Data Based on User Selection ---
-    map_data = df[
-        (df['Severity Label'] == selected_severity_map) &
-        (df['Weather Label'] == selected_weather_map) &
-        (df['Light Label'] == selected_light_map)
-    ]
+    # --- Prediction Logic ---
+    if st.sidebar.button("Predict Severity", type="primary", use_container_width=True):
+        
+        feature_columns_in_order = [col.strip().lower() for col in model.get_booster().feature_names]
+        
+        input_data = {}
+        for col in feature_columns_in_order:
+            if col in df.columns:
+                if pd.api.types.is_numeric_dtype(df[col]):
+                    input_data[col] = [df[col].median()]
+                else:
+                    input_data[col] = [df[col].mode()[0]]
+            else:
+                input_data[col] = [0]  # default fallback
 
-    st.write(f"Visualizing *{len(map_data)}* accidents matching your criteria.")
+        # Update with user inputs
+        user_inputs = {
+            'hour': [hour],
+            'day_of_week': [day_of_week],
+            'light_conditions': [light_conditions],
+            'weather_conditions': [weather_conditions],
+            'road_surface_conditions': [road_surface],
+            'number_of_vehicles': [num_vehicles],
+            'number_of_casualties': [num_casualties]
+        }
+        input_data.update(user_inputs)
 
-    # --- Create and display the Folium Map ---
-    if not map_data.empty:
-        st.pydeck_chart(pdk.Deck(
-            map_style='mapbox://styles/mapbox/dark-v9',
-            initial_view_state=pdk.ViewState(
-                latitude=20.5937, longitude=78.9629, zoom=4, pitch=50
+        input_df = pd.DataFrame(input_data)[feature_columns_in_order]
+        
+        # Make prediction
+        prediction_index = model.predict(input_df)[0]
+        prediction_proba = model.predict_proba(input_df)[0]
+        
+        severity_labels = {0: 'Slight', 1: 'Serious', 2: 'Fatal'}
+        predicted_severity = severity_labels[prediction_index]
+        
+        # Display prediction
+        st.subheader("Prediction Result")
+        if predicted_severity == 'Fatal':
+            st.error(f"Predicted Severity: {predicted_severity} (Confidence: {prediction_proba[prediction_index]:.2%})")
+        elif predicted_severity == 'Serious':
+            st.warning(f"Predicted Severity: {predicted_severity} (Confidence: {prediction_proba[prediction_index]:.2%})")
+        else:
+            st.success(f"Predicted Severity: {predicted_severity} (Confidence: {prediction_proba[prediction_index]:.2%})")
+    
+    # --- Map Visualization ---
+    st.subheader("🗺 Interactive Map of Accident Hotspots")
+    st.pydeck_chart(pdk.Deck(
+        initial_view_state=pdk.ViewState(latitude=df['latitude'].mean(), longitude=df['longitude'].mean(), zoom=5, pitch=50),
+        layers=[
+            pdk.Layer(
+                "HexagonLayer",
+                data=df[['latitude', 'longitude']],
+                get_position='[longitude, latitude]',
+                radius=500,
+                elevation_scale=4,
+                elevation_range=[0, 1000],
+                pickable=True,
+                extruded=True,
             ),
-            layers=[
-                pdk.Layer(
-                   'HeatmapLayer',
-                   data=map_data,
-                   get_position='[longitude, latitude]',
-                   opacity=0.8,
-                   get_weight=1
-                ),
-            ],
-            tooltip={"html": "<b>Severity:</b> {Severity Label}<br/><b>Weather:</b> {Weather Label}"}
-        ))
-    else:
-        st.warning("No accident data available for the selected filters.")
-
-# --- Sidebar for Prediction ---
-st.sidebar.header("🔮 Simulate an Accident Scenario")
-# ... (The prediction sidebar code remains the same as the previous correct version) ...
-# ... It will use its own separate set of friendly dropdowns ...
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=df[['latitude', 'longitude']],
+                get_position='[longitude, latitude]',
+                get_color='[200, 30, 0, 160]',
+                get_radius=200,
+            ),
+        ],
+    ))
