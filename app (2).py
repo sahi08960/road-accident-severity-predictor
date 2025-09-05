@@ -1,91 +1,66 @@
-# ==============================================================================
-#                      app.py - Streamlit Accident Severity App
-# ==============================================================================
-
 import streamlit as st
 import pandas as pd
 import joblib
-import os
 
-# --- 1. PAGE CONFIGURATION ---
-st.set_page_config(
-    page_title="Road Accident Severity Prediction",
-    page_icon="🚗",
-    layout="wide"
-)
+# --- Page Config ---
+st.set_page_config(page_title="Road Accident Severity Prediction", page_icon="🚗", layout="wide")
 
-# --- 2. LOAD MODEL ---
+# --- Load Model and Encoders ---
 @st.cache_resource
-def load_model():
-    """Load pre-trained XGBoost model."""
+def load_model_and_encoders():
     try:
         model = joblib.load("xgb_accident_model.pkl")
-        return model
+        le_light = joblib.load("le_light.pkl")  # LabelEncoder for light conditions
+        le_weather = joblib.load("le_weather.pkl")  # LabelEncoder for weather
+        return model, le_light, le_weather
     except FileNotFoundError:
-        st.error("❌ Model file missing! Upload 'xgb_accident_model.pkl'.")
-        return None
+        st.error("❌ Model or encoders missing! Upload 'xgb_accident_model.pkl', 'le_light.pkl', 'le_weather.pkl'.")
+        return None, None, None
 
-model = load_model()
+model, le_light, le_weather = load_model_and_encoders()
 
-# --- 3. USER INTERFACE ---
+# --- UI ---
 st.title("🚦 Road Accident Severity Prediction")
-st.markdown("Predict accident severity based on vehicle count, light, and weather conditions.")
+st.markdown("Predict accident severity based on vehicles, light, and weather.")
 
 if model is not None:
-    # Sidebar Inputs
-    st.sidebar.header("🔮 Accident Scenario")
     num_vehicles = st.sidebar.number_input("Number of Vehicles", 1, 15, 2)
     light_conditions = st.sidebar.selectbox(
-        "Light Conditions", 
-        options=["Daylight", "Darkness – lights lit", "Darkness – no lighting", "Darkness – lights unlit"]
+        "Light Conditions", options=le_light.classes_
     )
     weather_conditions = st.sidebar.selectbox(
-        "Weather Conditions", 
-        options=["Fine", "Rain", "Snow", "Fog", "Other"]
+        "Weather Conditions", options=le_weather.classes_
     )
 
-    # Prediction Button
     if st.sidebar.button("Predict Severity"):
-        # Get feature names from model
-        feature_columns_in_order = model.get_booster().feature_names
+        # Get model features
+        feature_columns = model.get_booster().feature_names
+        input_data = {col: [0] for col in feature_columns}  # default 0
 
-        # Build input dictionary with default 0s
-        input_data = {col: [0] for col in feature_columns_in_order}
-
-        # Map our 3 inputs if they exist in model features
-        mapping = {
-            "number_of_vehicles": num_vehicles,
-            "light_conditions": light_conditions,
-            "weather_conditions": weather_conditions
-        }
-        for key, value in mapping.items():
-            if key in input_data:
-                input_data[key] = [value]
+        # Map our 3 inputs
+        if "number_of_vehicles" in input_data:
+            input_data["number_of_vehicles"] = [num_vehicles]
+        if "light_conditions" in input_data:
+            input_data["light_conditions"] = [le_light.transform([light_conditions])[0]]
+        if "weather_conditions" in input_data:
+            input_data["weather_conditions"] = [le_weather.transform([weather_conditions])[0]]
 
         # Build DataFrame
-        input_df = pd.DataFrame(input_data)[feature_columns_in_order]
-
-        # Encode categoricals
-        for col in input_df.select_dtypes(include=["object"]).columns:
-            input_df[col] = input_df[col].astype("category").cat.codes
-
-        # Ensure numeric
+        input_df = pd.DataFrame(input_data)[feature_columns]
         input_df = input_df.astype(float)
 
         # Predict
-        prediction_index = model.predict(input_df)[0]
-        prediction_proba = model.predict_proba(input_df)[0]
+        pred_index = model.predict(input_df)[0]
+        pred_proba = model.predict_proba(input_df)[0]
 
         severity_labels = {0: "Slight", 1: "Serious", 2: "Fatal"}
-        predicted_severity = severity_labels[prediction_index]
+        predicted_severity = severity_labels[pred_index]
 
-        # Display result
+        # Display
         st.subheader("Prediction Result")
         if predicted_severity == "Fatal":
-            st.error(f"🚨 Predicted Severity: **{predicted_severity}** (Confidence: {prediction_proba[prediction_index]:.2%})")
+            st.error(f"🚨 Predicted Severity: **{predicted_severity}** ({pred_proba[pred_index]:.2%})")
         elif predicted_severity == "Serious":
-            st.warning(f"⚠️ Predicted Severity: **{predicted_severity}** (Confidence: {prediction_proba[prediction_index]:.2%})")
+            st.warning(f"⚠️ Predicted Severity: **{predicted_severity}** ({pred_proba[pred_index]:.2%})")
         else:
-            st.success(f"✅ Predicted Severity: **{predicted_severity}** (Confidence: {prediction_proba[prediction_index]:.2%})")
-else:
-    st.error("⚠️ Model not loaded. Please check 'xgb_accident_model.pkl'.")
+            st.success(f"✅ Predicted Severity: **{predicted_severity}** ({pred_proba[pred_index]:.2%})")
