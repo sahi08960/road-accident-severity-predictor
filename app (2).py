@@ -28,7 +28,7 @@ def load_and_prep_data():
     df = pd.read_csv(csv_filepath, low_memory=False)
     df.dropna(subset=['Accident_Severity', 'latitude', 'longitude'], inplace=True)
     
-    # --- THIS IS THE CRITICAL FIX: Perform Feature Engineering Here ---
+    # --- Feature Engineering ---
     df['Date'] = pd.to_datetime(df['Date'], errors='coerce', dayfirst=True)
     df['Time_dt'] = pd.to_datetime(df['Time'], errors='coerce', format='%H:%M')
     
@@ -36,15 +36,16 @@ def load_and_prep_data():
     df['Weekday'] = df['Date'].dt.weekday
     df['Hour'] = df['Time_dt'].dt.hour
     
-    # Create user-friendly labels for plotting
     severity_map = {1: 'Fatal', 2: 'Serious', 3: 'Slight'}
     df['Severity Label'] = df['Accident_Severity'].map(severity_map)
     
-    # Encode categorical columns that might be objects
+    # Encode categorical columns
     for col in df.select_dtypes(include=['object']).columns:
-        if col not in ['Severity Label']: # Don't encode our new friendly label
+        if col not in ['Severity Label']:
             df[col] = df[col].astype('category').cat.codes
 
+    # Normalize column names (for safe matching with model features)
+    df.columns = df.columns.str.strip().str.lower()
     return df
 
 # --- Load Assets ---
@@ -60,31 +61,37 @@ if model is not None and not df.empty:
     st.sidebar.header("🔮 Simulate an Accident Scenario")
     
     hour = st.sidebar.slider("Hour of Day", 0, 23, 17)
-    day_of_week = st.sidebar.selectbox("Day of Week", options=df['Day_of_Week'].unique(), index=4)
-    light_conditions = st.sidebar.selectbox("Light Conditions", options=sorted(df['Light_Conditions'].unique()))
-    weather_conditions = st.sidebar.selectbox("Weather Conditions", options=sorted(df['Weather_Conditions'].unique()))
-    road_surface = st.sidebar.selectbox("Road Surface Conditions", options=sorted(df['Road_Surface_Conditions'].dropna().unique()))
+    day_of_week = st.sidebar.selectbox("Day of Week", options=df['day_of_week'].unique(), index=4)
+    light_conditions = st.sidebar.selectbox("Light Conditions", options=sorted(df['light_conditions'].unique()))
+    weather_conditions = st.sidebar.selectbox("Weather Conditions", options=sorted(df['weather_conditions'].unique()))
+    road_surface = st.sidebar.selectbox("Road Surface Conditions", options=sorted(df['road_surface_conditions'].dropna().unique()))
     num_vehicles = st.sidebar.number_input("Number of Vehicles Involved", 1, 20, 2)
     num_casualties = st.sidebar.number_input("Number of Casualties", 1, 25, 1)
 
     # --- Prediction Logic ---
     if st.sidebar.button("Predict Severity", type="primary", use_container_width=True):
         
-        feature_columns_in_order = model.get_booster().feature_names
+        feature_columns_in_order = [col.strip().lower() for col in model.get_booster().feature_names]
         
         input_data = {}
-        # Create a dictionary of default values (median for numeric, mode for categorical)
         for col in feature_columns_in_order:
-            if pd.api.types.is_numeric_dtype(df[col]):
-                input_data[col] = [df[col].median()]
+            if col in df.columns:
+                if pd.api.types.is_numeric_dtype(df[col]):
+                    input_data[col] = [df[col].median()]
+                else:
+                    input_data[col] = [df[col].mode()[0]]
             else:
-                input_data[col] = [df[col].mode()[0]]
+                input_data[col] = [0]  # default fallback
 
         # Update with user inputs
         user_inputs = {
-            'Hour': [hour], 'Day_of_Week': [day_of_week], 'Light_Conditions': [light_conditions],
-            'Weather_Conditions': [weather_conditions], 'Road_Surface_Conditions': [road_surface],
-            'Number_of_Vehicles': [num_vehicles], 'Number_of_Casualties': [num_casualties]
+            'hour': [hour],
+            'day_of_week': [day_of_week],
+            'light_conditions': [light_conditions],
+            'weather_conditions': [weather_conditions],
+            'road_surface_conditions': [road_surface],
+            'number_of_vehicles': [num_vehicles],
+            'number_of_casualties': [num_casualties]
         }
         input_data.update(user_inputs)
 
@@ -106,6 +113,27 @@ if model is not None and not df.empty:
         else:
             st.success(f"Predicted Severity: *{predicted_severity}* (Confidence: {prediction_proba[prediction_index]:.2%})")
     
-    # --- Map Visualization (remains the same) ---
+    # --- Map Visualization ---
     st.subheader("🗺 Interactive Map of Accident Hotspots")
-    # ... (the rest of the map code goes here) ...
+    st.pydeck_chart(pdk.Deck(
+        initial_view_state=pdk.ViewState(latitude=df['latitude'].mean(), longitude=df['longitude'].mean(), zoom=5, pitch=50),
+        layers=[
+            pdk.Layer(
+                "HexagonLayer",
+                data=df[['latitude', 'longitude']],
+                get_position='[longitude, latitude]',
+                radius=500,
+                elevation_scale=4,
+                elevation_range=[0, 1000],
+                pickable=True,
+                extruded=True,
+            ),
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=df[['latitude', 'longitude']],
+                get_position='[longitude, latitude]',
+                get_color='[200, 30, 0, 160]',
+                get_radius=200,
+            ),
+        ],
+    ))
