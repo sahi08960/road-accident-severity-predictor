@@ -1,6 +1,7 @@
 # ==============================================================================
-#                      app.py - Simple Accident Severity Predictor
+#                      app.py - Streamlit Accident Severity App
 # ==============================================================================
+
 import streamlit as st
 import pandas as pd
 import joblib
@@ -15,19 +16,20 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. LOAD MODEL ---
+# --- 2. CACHED FUNCTIONS ---
 @st.cache_resource
 def load_model():
+    """Load pre-trained XGBoost model."""
     try:
-        model = joblib.load('xgb_accident_model.pkl')
+        model = joblib.load("xgb_accident_model.pkl")
         return model
     except FileNotFoundError:
-        st.error("Model file not found. Please ensure 'xgb_accident_model.pkl' is in the repo.")
+        st.error("❌ Model file missing! Upload 'xgb_accident_model.pkl' to repo.")
         return None
 
-# --- 3. LOAD DATA ---
 @st.cache_data
 def load_and_prep_data():
+    """Load and prepare dataset (used only for defaults)."""
     zip_path = "archive (4).zip"
     extract_path = "dataset"
     csv_filename = "AccidentsBig.csv"
@@ -35,74 +37,79 @@ def load_and_prep_data():
 
     try:
         if not os.path.exists(csv_filepath):
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            with zipfile.ZipFile(zip_path, "r") as zip_ref:
                 zip_ref.extractall(extract_path)
 
         df = pd.read_csv(csv_filepath, low_memory=False)
-        df.dropna(subset=['Accident_Severity'], inplace=True)
+        df.dropna(subset=["Accident_Severity", "latitude", "longitude"], inplace=True)
+
+        # Only keep useful columns for our app
+        keep_cols = ["Light_Conditions", "Weather_Conditions",
+                     "Number_of_Vehicles", "Number_of_Casualties", "Time"]
+        df = df[keep_cols]
+
+        # Extract hour from Time
+        df["Time_dt"] = pd.to_datetime(df["Time"], errors="coerce", format="%H:%M")
+        df["Hour"] = df["Time_dt"].dt.hour.fillna(12).astype(int)
 
         return df
     except FileNotFoundError:
-        st.error(f"Dataset file '{zip_path}' not found.")
+        st.error("❌ Dataset file missing! Upload 'archive (4).zip' to repo.")
         return pd.DataFrame()
 
-# --- 4. LOAD ASSETS ---
+# --- 3. LOAD MODEL + DATA ---
 model = load_model()
 df = load_and_prep_data()
 
-# --- 5. MAIN USER INTERFACE ---
-st.title("🚦 Road Accident Severity Predictor")
-st.markdown("A simple ML-powered tool to predict accident severity based on key factors.")
+# --- 4. USER INTERFACE ---
+st.title("🚦 Road Accident Severity Prediction")
+st.markdown("Adjust the inputs to simulate an accident and predict severity.")
 
 if model is not None and not df.empty:
-    st.sidebar.header("🔮 Accident Scenario Input")
+    # Sidebar Inputs
+    st.sidebar.header("🔮 Accident Scenario")
+    hour = st.sidebar.slider("Hour of Day (0-23)", 0, 23, 12)
+    light_conditions = st.sidebar.selectbox("Light Conditions", options=sorted(df["Light_Conditions"].dropna().unique()))
+    weather_conditions = st.sidebar.selectbox("Weather Conditions", options=sorted(df["Weather_Conditions"].dropna().unique()))
+    num_vehicles = st.sidebar.number_input("Number of Vehicles", 1, 15, 2)
+    num_casualties = st.sidebar.number_input("Number of Casualties", 1, 20, 1)
 
-    # Input fields
-    hour = st.sidebar.slider("Hour of Day (0-23)", 0, 23, 17)
-    weather_conditions = st.sidebar.selectbox("Weather Conditions", options=sorted(df['Weather_Conditions'].dropna().unique()))
-    num_vehicles = st.sidebar.number_input("Number of Vehicles Involved", 1, 15, 2)
-    daylight = st.sidebar.radio("Daylight/Darkness", ["Daylight", "Darkness"])
-
-    # Prediction button
+    # Prediction Button
     if st.sidebar.button("Predict Severity", type="primary", use_container_width=True):
         feature_columns_in_order = model.get_booster().feature_names
 
-        # Default input with median/mode values
-        input_data = {}
-        for col in feature_columns_in_order:
-            if col in df.columns:
-                if pd.api.types.is_numeric_dtype(df[col]):
-                    input_data[col] = [df[col].median()]
-                else:
-                    input_data[col] = [df[col].mode()[0]]
-            else:
-                input_data[col] = [0]
+        # Build input data with defaults
+        input_data = {col: [0] for col in feature_columns_in_order}
+        if "hour" in feature_columns_in_order: input_data["hour"] = [hour]
+        if "light_conditions" in feature_columns_in_order: input_data["light_conditions"] = [light_conditions]
+        if "weather_conditions" in feature_columns_in_order: input_data["weather_conditions"] = [weather_conditions]
+        if "number_of_vehicles" in feature_columns_in_order: input_data["number_of_vehicles"] = [num_vehicles]
+        if "number_of_casualties" in feature_columns_in_order: input_data["number_of_casualties"] = [num_casualties]
 
-        # Update with user inputs
-        user_inputs = {
-            'Hour': [hour],
-            'Weather_Conditions': [weather_conditions],
-            'Number_of_Vehicles': [num_vehicles],
-            'Light_Conditions': [1 if daylight == "Daylight" else 0]  # encoding
-        }
-        input_data.update(user_inputs)
-
+        # DataFrame in correct order
         input_df = pd.DataFrame(input_data)[feature_columns_in_order]
+
+        # 🔹 Encode categorical columns
+        for col in input_df.select_dtypes(include=["object"]).columns:
+            input_df[col] = input_df[col].astype("category").cat.codes
+
+        # 🔹 Ensure numeric
+        input_df = input_df.astype(float)
 
         # Predict
         prediction_index = model.predict(input_df)[0]
         prediction_proba = model.predict_proba(input_df)[0]
 
-        severity_labels = {0: 'Slight', 1: 'Serious', 2: 'Fatal'}
+        severity_labels = {0: "Slight", 1: "Serious", 2: "Fatal"}
         predicted_severity = severity_labels[prediction_index]
 
+        # Show result
         st.subheader("Prediction Result")
-        if predicted_severity == 'Fatal':
-            st.error(f"Predicted Severity: *{predicted_severity}* (Confidence: {prediction_proba[prediction_index]:.2%})")
-        elif predicted_severity == 'Serious':
-            st.warning(f"Predicted Severity: *{predicted_severity}* (Confidence: {prediction_proba[prediction_index]:.2%})")
+        if predicted_severity == "Fatal":
+            st.error(f"🚨 Predicted Severity: **{predicted_severity}** (Confidence: {prediction_proba[prediction_index]:.2%})")
+        elif predicted_severity == "Serious":
+            st.warning(f"⚠️ Predicted Severity: **{predicted_severity}** (Confidence: {prediction_proba[prediction_index]:.2%})")
         else:
-            st.success(f"Predicted Severity: *{predicted_severity}* (Confidence: {prediction_proba[prediction_index]:.2%})")
-
+            st.success(f"✅ Predicted Severity: **{predicted_severity}** (Confidence: {prediction_proba[prediction_index]:.2%})")
 else:
-    st.error("Could not load model or dataset.")
+    st.error("⚠️ App could not load model or dataset. Please check files in repo.")
