@@ -1,38 +1,35 @@
+# ==============================================================================
+#                      app.py - Road Accident Severity Prediction
+# ==============================================================================
+
 import streamlit as st
 import pandas as pd
-import numpy as np
+import pydeck as pdk
 import joblib
-import json
-import shap
-import matplotlib.pyplot as plt
-import zipfile
 import os
+import zipfile
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Accident Severity Predictor",
-    page_icon="🚦",
-    layout="centered"
+    page_title="Road Accident Severity Prediction",
+    page_icon="🚗",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# --- 2. ASSET LOADING (with caching for performance) ---
+# --- 2. LOAD MODEL PIPELINE ---
 @st.cache_resource
-def load_assets():
-    """Load all necessary assets: model, columns list, and the SHAP explainer."""
-    import shap  # Import shap here for the cached function to work reliably
+def load_model():
     try:
-        model = joblib.load('xgb_accident_model.pkl')
-        with open('model_columns.json', 'r') as f:
-            model_columns = json.load(f)
-        
-        explainer_shap = shap.TreeExplainer(model)
-        return model, model_columns, explainer_shap
+        model = joblib.load("xgb_accident_model.pkl")  # rename cleanly in your repo
+        return model
     except FileNotFoundError:
-        return None, None, None
+        st.error("❌ Model file not found. Please upload 'xgb_accident_model.pkl' to the repository.")
+        return None
 
+# --- 3. LOAD DATASET (for map only) ---
 @st.cache_data
-def load_default_data():
-    """Load and prepare the full dataset to get realistic default values (median/mode)."""
+def load_and_prep_data():
     zip_path = "archive (4).zip"
     extract_path = "dataset"
     csv_filename = "AccidentsBig.csv"
@@ -40,110 +37,122 @@ def load_default_data():
 
     try:
         if not os.path.exists(csv_filepath):
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            with zipfile.ZipFile(zip_path, "r") as zip_ref:
                 zip_ref.extractall(extract_path)
 
         df = pd.read_csv(csv_filepath, low_memory=False)
-        df.dropna(subset=['Accident_Severity'], inplace=True)
-        
-        X = df.drop(columns=['Accident_Severity', 'Accident_Index', 'Date', 'Time', 'LSOA_of_Accident_Location'])
-        
-        # Engineer the same features the model was trained on
-        df['Date'] = pd.to_datetime(df['Date'], errors='coerce', dayfirst=True)
-        df['Time_dt'] = pd.to_datetime(df['Time'], errors='coerce', format='%H:%M')
-        X['Month'] = df['Date'].dt.month
-        X['Weekday'] = df['Date'].dt.weekday
-        X['Hour'] = df['Time_dt'].dt.hour
+        df.dropna(subset=["Accident_Severity", "latitude", "longitude"], inplace=True)
 
-        # Encode any text columns to numbers
-        categorical_cols = X.select_dtypes(include=['object']).columns
-        for col in categorical_cols:
-            X[col] = X[col].astype('category').cat.codes
-            
-        return X
+        severity_map = {1: "Fatal", 2: "Serious", 3: "Slight"}
+        df["Severity Label"] = df["Accident_Severity"].map(severity_map)
+
+        df["Time_dt"] = pd.to_datetime(df["Time"], errors="coerce", format="%H:%M")
+        df["Hour"] = df["Time_dt"].dt.hour
+
+        return df
     except FileNotFoundError:
-        return None
+        st.error(f"❌ Dataset file '{zip_path}' not found. Please ensure it is in the repository.")
+        return pd.DataFrame()
 
-# --- Load Assets ---
-model, model_columns, explainer_shap = load_assets()
-X_defaults = load_default_data()
+# --- 4. LOAD ASSETS ---
+model = load_model()
+df = load_and_prep_data()
 
-# --- 3. USER INTERFACE ---
-st.title("🚦 Explainable Accident Severity Predictor")
+# --- 5. MAIN APP ---
+st.title("🚦 Indian Road Accident Severity: Prediction & Analysis")
+st.markdown("Predict accident severity and visualize hotspots across India.")
 
-if model is None or model_columns is None or X_defaults is None:
-    st.error("Could not load necessary model or data files. Please ensure 'xgb_accident_model.pkl', 'model_columns.json', and 'archive (4).zip' are in your GitHub repository and reboot the app.")
-else:
-    st.markdown("Select the conditions of an accident to get a prediction and an explanation of *why* the model made that choice.")
+if model is not None and not df.empty:
 
-    # --- Sidebar for User Input ---
-    st.sidebar.header("Accident Scenario")
-    hour = st.sidebar.slider("Time of Day (Hour)", 0, 23, 17)
-    weather_conditions = st.sidebar.selectbox(
-        "Weather Condition",
-        options={1: "Fine", 2: "Rainy", 7: "Fog/Mist", 8: "Other"}.keys(),
-        format_func=lambda x: {1: "Fine", 2: "Rainy", 7: "Fog/Mist", 8: "Other"}[x]
+    # --- Sidebar: User Inputs ---
+    st.sidebar.header("🔮 Simulate an Accident Scenario")
+
+    hour = st.sidebar.slider("Hour of Day (0-23)", 0, 23, 17)
+    day_of_week = st.sidebar.selectbox(
+        "Day of Week",
+        options=range(1, 8),
+        format_func=lambda x: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][x - 1],
+        index=4
     )
-    num_vehicles = st.sidebar.number_input("Number of Vehicles Involved", 1, 20, 2)
+    light_conditions = st.sidebar.selectbox("Light Conditions", sorted(df["Light_Conditions"].dropna().unique()))
+    weather_conditions = st.sidebar.selectbox("Weather Conditions", sorted(df["Weather_Conditions"].dropna().unique()))
+    road_surface = st.sidebar.selectbox("Road Surface Conditions", sorted(df["Road_Surface_Conditions"].dropna().unique()))
+    num_vehicles = st.sidebar.number_input("Number of Vehicles Involved", 1, 15, 2)
+    num_casualties = st.sidebar.number_input("Number of Casualties", 1, 20, 1)
 
-    # --- 4. PREDICTION AND EXPLANATION LOGIC ---
-    if st.sidebar.button("Predict & Explain", type="primary", use_container_width=True):
-        
-        # Create a dictionary for the input using realistic defaults (median/mode)
-        input_data = {}
-        for col in model_columns:
-            if pd.api.types.is_numeric_dtype(X_defaults[col]):
-                input_data[col] = X_defaults[col].median()
-            else:
-                input_data[col] = X_defaults[col].mode()[0]
-        
-        # Now, create a DataFrame from this single row of defaults
-        input_df = pd.DataFrame([input_data])
-        
-        # Update the DataFrame with the user's specific inputs
-        input_df['Hour'] = hour
-        input_df['Weather_Conditions'] = weather_conditions
-        input_df['Number_of_Vehicles'] = num_vehicles
-        
-        # Ensure the column order is exactly what the model expects
-        input_df = input_df[model_columns]
+    # --- Prediction Button ---
+    if st.sidebar.button("Predict Severity", type="primary", use_container_width=True):
 
-        # --- Make Prediction ---
+        # Collect user inputs
+        user_inputs = {
+            "Hour": hour,
+            "Day_of_Week": day_of_week,
+            "Light_Conditions": light_conditions,
+            "Weather_Conditions": weather_conditions,
+            "Road_Surface_Conditions": road_surface,
+            "Number_of_Vehicles": num_vehicles,
+            "Number_of_Casualties": num_casualties,
+        }
+
+        # --- IMPORTANT ---
+        # Your model was trained with MANY extra features (Police_Force, Urban/Rural, etc.)
+        # You MUST supply defaults here, otherwise pipeline will error.
+        # Example defaults (adjust to match your dataset):
+        user_inputs.update({
+            "Urban_or_Rural_Area": 1,     # 1 = Urban (most common)
+            "Police_Force": 1,            # default police code
+            "1st_Road_Class": 3,          # default = minor road
+            "Carriageway_Hazards": 0,     # none
+        })
+
+        # Convert to DataFrame
+        input_df = pd.DataFrame([user_inputs])
+
+        # --- Predict with pipeline ---
         prediction_index = model.predict(input_df)[0]
         prediction_proba = model.predict_proba(input_df)[0]
-        severity_labels = {0: 'Slight', 1: 'Serious', 2: 'Fatal'}
-        predicted_severity = severity_labels.get(prediction_index, "Unknown")
-        is_serious = predicted_severity in ['Serious', 'Fatal']
 
-        # --- Display Prediction ---
-        st.subheader("Model Prediction")
-        if is_serious:
-            st.error(f"The model predicts this is a *{predicted_severity}* accident.")
+        severity_labels = {0: "Slight", 1: "Serious", 2: "Fatal"}
+        predicted_severity = severity_labels[prediction_index]
+
+        # --- Show result ---
+        st.subheader("Prediction Result")
+        if predicted_severity == "Fatal":
+            st.error(f"Predicted Severity: *{predicted_severity}* "
+                     f"(Confidence: {prediction_proba[prediction_index]:.2%})")
+        elif predicted_severity == "Serious":
+            st.warning(f"Predicted Severity: *{predicted_severity}* "
+                       f"(Confidence: {prediction_proba[prediction_index]:.2%})")
         else:
-            st.success(f"The model predicts this is a *{predicted_severity} (Normal)* accident.")
-        
-        # Display Probabilities as a bar chart
-        st.write("*Prediction Confidence:*")
-        prob_df = pd.DataFrame({
-            'Severity': ['Slight (Normal)', 'Serious', 'Fatal'],
-            'Probability': prediction_proba * 100
-        })
-        st.bar_chart(prob_df.set_index('Severity'))
+            st.success(f"Predicted Severity: *{predicted_severity}* "
+                       f"(Confidence: {prediction_proba[prediction_index]:.2%})")
 
-        # --- SHAP Explanation (Waterfall Plot) ---
-        with st.expander("View Detailed Reasons for this Prediction (SHAP)"):
-            shap_values = explainer_shap.shap_values(input_df)
-            
-            # Create the SHAP Explanation object
-            shap_explanation = shap.Explanation(
-                values=shap_values[prediction_index][0],
-                base_values=explainer_shap.expected_value[prediction_index],
-                data=input_df.iloc[0],
-                feature_names=input_df.columns.tolist()
+    # --- Map Visualization ---
+    st.subheader("🗺 Interactive Map of Accident Hotspots")
+    selected_severity_map = st.selectbox(
+        "Select Severity to Visualize on the Map:",
+        options=sorted(df["Severity Label"].dropna().unique())
+    )
+
+    map_data = df[df["Severity Label"] == selected_severity_map]
+
+    st.pydeck_chart(pdk.Deck(
+        map_style="mapbox://styles/mapbox/dark-v9",
+        initial_view_state=pdk.ViewState(latitude=20.5937, longitude=78.9629, zoom=4, pitch=50),
+        layers=[
+            pdk.Layer(
+                "HeatmapLayer",
+                data=map_data,
+                get_position="[longitude, latitude]",
+                radius=100,
+                elevation_scale=4,
+                elevation_range=[0, 1000],
+                pickable=True,
+                extruded=True,
             )
-            
-            st.write(f"*Explanation for the '{predicted_severity}' prediction:*")
-            fig, ax = plt.subplots()
-            shap.waterfall_plot(shap_explanation, max_display=10, show=False)
-            st.pyplot(fig, use_container_width=True)
-            st.markdown("This waterfall plot shows how each feature pushed the prediction from the average case (bottom) to the final result (top). Red arrows increase the risk, blue arrows decrease it.")
+        ],
+        tooltip={"html": "<b>Severity:</b> {Severity Label}<br/><b>Hour:</b> {Hour}:00"}
+    ))
+
+else:
+    st.error("⚠️ Could not load model or dataset. Please check your repository files.")
