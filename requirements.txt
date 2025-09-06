@@ -3,5 +3,5 @@ pandas
 pydeck
 xgboost
 scikit-learn
-imblearn
+imbalanced-learn
 joblib
