@@ -21,10 +21,10 @@ st.set_page_config(
 @st.cache_resource
 def load_model():
     try:
-        model = joblib.load("xgb_accident_model.pkl")  # rename cleanly in your repo
+        model = joblib.load("xgb_accident_model.pkl")  # ✅ rename before pushing
         return model
     except FileNotFoundError:
-        st.error("❌ Model file not found. Please upload 'xgb_accident_model.pkl' to the repository.")
+        st.error("❌ Model file not found. Please ensure 'xgb_accident_model.pkl' is in the repository.")
         return None
 
 # --- 3. LOAD DATASET (for map only) ---
@@ -94,15 +94,18 @@ if model is not None and not df.empty:
             "Number_of_Casualties": num_casualties,
         }
 
-        # --- IMPORTANT ---
-        # Your model was trained with MANY extra features (Police_Force, Urban/Rural, etc.)
-        # You MUST supply defaults here, otherwise pipeline will error.
-        # Example defaults (adjust to match your dataset):
+        # --- Add defaults for required features not in UI ---
         user_inputs.update({
-            "Urban_or_Rural_Area": 1,     # 1 = Urban (most common)
-            "Police_Force": 1,            # default police code
-            "1st_Road_Class": 3,          # default = minor road
-            "Carriageway_Hazards": 0,     # none
+            "Urban_or_Rural_Area": 1,     # Urban
+            "Police_Force": 1,            # Metropolitan
+            "1st_Road_Class": 3,          # Minor road
+            "Carriageway_Hazards": 0,     # None
+            "Junction_Detail": 0,         # Not at junction
+            "Junction_Control": 0,        # No control
+            "Pedestrian_Crossing-Human_Control": 0,
+            "Pedestrian_Crossing-Physical_Facilities": 0,
+            "Special_Conditions_at_Site": 0,
+            "2nd_Road_Class": 9           # Unknown/None
         })
 
         # Convert to DataFrame
